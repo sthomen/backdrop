@@ -94,40 +94,6 @@ function config_get($config_file, $option = NULL) {
 }
 
 /**
- * A shortcut function to load and retrieve a single translated value from a config file.
- *
- * @param string $config_file
- *   The name of the configuration object to retrieve. The name corresponds to
- *   an JSON configuration file. For @code config('book.admin') @endcode, the
- *   config object returned will contain the contents of book.admin.json.
- * @param string $option
- *   The name of the config option within the file to read. The config option
- *   may contain periods to indicate levels within the config file. If NULL is
- *   passed in, the entire contents of the config file will be returned.
- * @param array $args
- *   An associative array of replacements to make. Replacements are made in the
- *   same way as the t() function.
- * @param array $options
- *   An associative array of additional options, with the following elements:
- *   - 'langcode' (defaults to the current language): The language code to
- *     translate to a language other than what is used to display the page.
- *   - 'context' (defaults to the empty context): The context the source string
- *     belongs to.
- *
- * @return string
- *   The translated contents of the requested config option. Returns default if no
- *   translation is found. Returns NULL if the specified option was not found in
- *   the file at all or if not a string.
- *
- * @see t()
- * @see config_get()
- */
-function config_get_translated($config_file, $option = NULL, $args = array(), $options = array()) {
-  $config = config($config_file);
-  return $config->getTranslated($option, $args, $options);
-}
-
-/**
  * A shortcut function to set and save a single value in a config file.
  *
  * Note that this function immediately writes the config file to disk and clears
@@ -355,6 +321,12 @@ class Config {
   const MAX_NAME_LENGTH = 250;
 
   /**
+   *
+   * Key name for translated configuration
+   */
+  const TRANSLATED = '_translated';
+
+  /**
    * The name of the configuration object.
    *
    * @var string
@@ -403,6 +375,13 @@ class Config {
    * @var bool
    */
   protected $isLoaded = FALSE;
+
+  /**
+   * Translation context, the langcode values this configuration object will retrieve
+   *
+   * @var string
+   */
+  protected $langcode = NULL;
 
   /**
    * Constructs a configuration object.
@@ -466,6 +445,20 @@ class Config {
    */
   public function setName($name) {
     $this->name = $name;
+    return $this;
+  }
+
+  /**
+   * Set language for this configuration object.
+   *
+   * @param string $langcode
+   *  The language data to retrieve
+   *
+   * @return Config
+   *  The configuration object
+   */
+  public function setLangcode($langcode) {
+    $this->langcode = $langcode;
     return $this;
   }
 
@@ -554,20 +547,19 @@ class Config {
    * @return mixed
    *   The data that was requested.
    */
-  public function get($key = '') {
+  public function _get($key = '') {
     if (!$this->isLoaded) {
       $this->load();
     }
-    if (empty($key)) {
-      return $this->data;
-    }
-    else {
+
+    $value = $this->data;
+
+    if (!empty($key)) {
       $parts = explode('.', $key);
       if (count($parts) == 1) {
-        return isset($this->data[$key]) ? $this->data[$key] : NULL;
+        $value = isset($this->data[$key]) ? $this->data[$key] : NULL;
       }
       else {
-        $value = $this->data;
         $key_exists = FALSE;
         foreach ($parts as $part) {
           if (is_array($value) && array_key_exists($part, $value)) {
@@ -579,68 +571,79 @@ class Config {
             break;
           }
         }
-        return $key_exists ? $value : NULL;
+        $value = $key_exists ? $value : NULL;
       }
     }
+
+    return $value;
   }
 
   /**
-   * Gets translated data from this configuration object.
+   * This function wraps the non-translated get function and runs the
+   * translation filter on the results.
    *
    * @param string $key
    *   A string that maps to a key within the configuration data.
-   *   For instance in the following configuration array:
-   *   @code
-   *   array(
-   *     'foo' => array(
-   *       'bar' => 'baz',
-   *     ),
-   *   );
-   *   @endcode
-   *   A key of 'foo.bar' would return the string 'baz'. However, a key of 'foo'
-   *   would return array('bar' => 'baz').
-   *   If no key is specified, then an empty string is returned.
-   *   If the key is not 'translatable' key then the original string is returned.
-   *   If the key's value is not a string then an empty string is returned.
    *
-   * @param array $args
-   *   An associative array of replacements to make. Replacements are made in
-   *   the same way as the t() function.
-   * @param array $options
-   *   An associative array of additional options, with the following elements:
-   *   - 'langcode' (defaults to the current language): The language code to
-   *     translate to a language other than what is used to display the page.
-   *   - 'context' (defaults to the empty context): The context the source string
-   *     belongs to.
+   * @return mixed
+   *   The data that was requested
    *
-   * @return string|NULL
-   *   The translated data that was requested.
-   *
-   * @see t()
-   * @see get()
+   * @see $this->_get
+   * @see $this->translationFilter
    */
-  public function getTranslated($key = '', $args = array(), $options = array()) {
-    if (empty($key)) {
-      return NULL;
+  public function get($key = '') {
+    global $language;
+
+    if ($language && $this->language == NULL) {
+      $this->setLangcode($language->langcode);
     }
-    $value = $this->get($key);
-    if (!is_string($value)) {
-      return NULL;
+
+    return $this->translationFilter($this->_get($key));
+  }
+
+  /**
+   * Filter translated values
+   *
+   * This function filters translated values by looking for a specific key in
+   * the values of the requested key, if it turns out it has been
+   * internationalized, then check $this->langcode for which one to return.
+   *
+   * If a translated value is encountered and no value has been set in langcode
+   * this function will select a default translation by the simple expedient of
+   * returning the first value it encounters and also set the langcode to this
+   * value to prevent inconsistencies, once a string has been returned in a
+   * given language it makes more sense to return ALL translated strings in the
+   * same language rather than guessing each time and potentially getting it
+   * wrong.
+   *
+   * @param mixed $base
+   *   The configuration array to filter, it may be a single value in which
+   *   case this function does nothing.
+   *
+   * @see self::TRANSLATED
+   */
+
+  protected function translationFilter($base) {
+    if (is_array($base)) {
+      if (array_key_exists(self::TRANSLATED, $base) && $base[self::TRANSLATED]) {
+        $translations = array_diff(array_keys($base), array(self::TRANSLATED));
+        // Default to the first encountered translation language if none is set
+        if ($this->langcode == NULL || !in_array($this->langcode, $translations)) {
+          $this->setLangcode(reset($translations));
+        }
+        
+        $base = $base[$this->langcode];
+      }
+      else {
+        // The current key didn't contain any translations, but children of this
+        // key might, so recurse and try again.
+        foreach ($base as $index => $child) {
+          $base[$index] = $this->translationFilter($child);
+        }
+      }
     }
-    if (!is_array($this->get('_config_translatables'))) {
-      return $value;
-    }
-    // Ensure that it's a translatable key.
-    if (!in_array($key, $this->get('_config_translatables'))) {
-      return $value;
-    }
-    // Set a default context so we can differentiate between config strings.
-    // Rather than by using isset() or empty(), checking by key existence
-    // allows a NULL context to be used.
-    if (!array_key_exists('context', $options)) {
-      $options['context'] = 'config:' . $this->getName() . ':' . $key;
-    }
-    return t($value, $args, $options);
+
+    return $base;
   }
 
   /**
@@ -693,30 +696,67 @@ class Config {
    *   The configuration object.
    */
   public function set($key, $value) {
-    if (!$this->isLoaded) {
-      $this->load();
+    global $language;
+
+    if ($language) {
+      $this->setLangcode($language->langcode);
     }
 
-    // The dot/period is a reserved character; it may appear between keys, but
-    // not within keys.
-    $parts = explode('.', $key);
-    if (count($parts) == 1) {
-      $this->data[$key] = $value;
+    $data = &$this->data;
+
+    $path = explode('.', $key);
+
+    if (count($path) > 1) {
+      $key = array_pop($path);
+
+      foreach ($path as $part) {
+        if (isset($data[$part])) {
+          $data = &$data[$part];
+        }
+      }
+    }
+
+    if ($this->langcode == NULL) {
+      $data[$key] = $value;
     }
     else {
-      $data = &$this->data;
-      $last_key = array_pop($parts);
-      foreach ($parts as $part) {
-        if (!isset($data)) {
-          $data[$part] = array();
-        }
-        $data = &$data[$part];
-      }
-      $data[$last_key] = $value;
+      $this->mergeTranslation($data[$key], $value);
     }
+
     $this->validated = FALSE;
 
     return $this;
+  }
+
+  /**
+   * Because of the need to handle the possibility of there being translated
+   * values in the configuration tree, we can't just replace the contents when
+   * setting values. This function recursively walks through the tree to be set
+   * and checks for translated values and transparetly handles the storing of
+   * translated values in the set language.
+   *
+   * This function modifies the $base variable, it does not return anything
+   *
+   * @param mixed $base
+   *   The current base of the tree structure being examined
+   *
+   * @param mixed $value
+   *   The value to store/update
+   */
+  protected function mergeTranslation(&$base, $value) {
+    if (is_array($value)) {
+      foreach ($value as $index => $item) {
+        $this->mergeTranslation($base[$index], $item);
+      }
+    }
+    else {
+      if (is_array($base) && array_key_exists(self::TRANSLATED, $base)) {
+        $base[$this->langcode] = $value;
+      }
+      else {
+        $base = $value;
+      }
+    }
   }
 
   /**

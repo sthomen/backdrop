@@ -395,10 +395,6 @@ class Config {
   public function __construct($name, ConfigStorageInterface $storage) {
     $this->name = $name;
     $this->storage = $storage;
-
-    if ($language) {
-      $this->setLangcode($language->langcode);
-    }
   }
 
   /**
@@ -642,11 +638,11 @@ class Config {
    */
 
   protected function translationFilter($base) {
-    $langcode = $this->getLangcode();
 
     if (is_array($base)) {
       if (array_key_exists(self::TRANSLATED, $base) && $base[self::TRANSLATED]) {
         $translations = array_diff(array_keys($base), array(self::TRANSLATED));
+        $langcode = $this->getLangcode();
         // Default to the first encountered translation language if none is set
         if ($langcode == NULL || !in_array($langcode, $translations)) {
           $langcode = reset($translations);

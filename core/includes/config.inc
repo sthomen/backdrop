@@ -646,6 +646,7 @@ class Config {
         // Default to the first encountered translation language if none is set
         if ($langcode == NULL || !in_array($langcode, $translations)) {
           $langcode = reset($translations);
+		  $this->setLangcode($langcode);
         }
         
         $base = $base[$langcode];

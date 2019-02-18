@@ -395,6 +395,10 @@ class Config {
   public function __construct($name, ConfigStorageInterface $storage) {
     $this->name = $name;
     $this->storage = $storage;
+
+    if ($language) {
+      $this->setLangcode($language->langcode);
+    }
   }
 
   /**
@@ -460,6 +464,26 @@ class Config {
   public function setLangcode($langcode) {
     $this->langcode = $langcode;
     return $this;
+  }
+
+  /**
+   * Get the language code that has been set for this object or the current
+   * site language or NULL if none found.
+   *
+   * @return mixed
+   *  The pertinent language or NULL
+   */
+
+  protected function getLangcode() {
+    global $language;
+
+    $langcode = $this->langcode;
+
+    if ($language && $langcode == NULL) {
+      $langcode = $language->langcode;
+    }
+
+    return $langcode;
   }
 
   /**
@@ -592,12 +616,6 @@ class Config {
    * @see $this->translationFilter
    */
   public function get($key = '') {
-    global $language;
-
-    if ($language && $this->language == NULL) {
-      $this->setLangcode($language->langcode);
-    }
-
     return $this->translationFilter($this->_get($key));
   }
 
@@ -624,15 +642,17 @@ class Config {
    */
 
   protected function translationFilter($base) {
+    $langcode = $this->getLangcode();
+
     if (is_array($base)) {
       if (array_key_exists(self::TRANSLATED, $base) && $base[self::TRANSLATED]) {
         $translations = array_diff(array_keys($base), array(self::TRANSLATED));
         // Default to the first encountered translation language if none is set
-        if ($this->langcode == NULL || !in_array($this->langcode, $translations)) {
-          $this->setLangcode(reset($translations));
+        if ($langcode == NULL || !in_array($langcode, $translations)) {
+          $langcode = reset($translations);
         }
         
-        $base = $base[$this->langcode];
+        $base = $base[$langcode];
       }
       else {
         // The current key didn't contain any translations, but children of this
@@ -696,12 +716,6 @@ class Config {
    *   The configuration object.
    */
   public function set($key, $value) {
-    global $language;
-
-    if ($language) {
-      $this->setLangcode($language->langcode);
-    }
-
     $data = &$this->data;
 
     $path = explode('.', $key);
@@ -716,11 +730,13 @@ class Config {
       }
     }
 
-    if ($this->langcode == NULL) {
+    $langcode = $this->getLangcode();
+
+    if ($langcode == NULL) {
       $data[$key] = $value;
     }
     else {
-      $this->mergeTranslation($data[$key], $value);
+      $this->mergeTranslation($data[$key], $value, $langcode);
     }
 
     $this->validated = FALSE;
@@ -743,15 +759,15 @@ class Config {
    * @param mixed $value
    *   The value to store/update
    */
-  protected function mergeTranslation(&$base, $value) {
+  protected function mergeTranslation(&$base, $value, $langcode) {
     if (is_array($value)) {
       foreach ($value as $index => $item) {
-        $this->mergeTranslation($base[$index], $item);
+        $this->mergeTranslation($base[$index], $item, $langcode);
       }
     }
     else {
       if (is_array($base) && array_key_exists(self::TRANSLATED, $base)) {
-        $base[$this->langcode] = $value;
+        $base[$langcode] = $value;
       }
       else {
         $base = $value;
